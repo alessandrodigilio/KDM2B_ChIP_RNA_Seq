@@ -1,0 +1,613 @@
+---
+title: "KDM2B-mediated PRC1 recruitment to chromatin: RNA-seq & ChIP-seq data analysis"
+author: "Alessandro Digilio"
+date: "2024-05-27"
+output: html_document
+---
+
+In this report it is shown how to process RNA-Seq and ChIP-Seq data from raw FASTQ files. The data derive from GEO data bank (GEO Series: GSE190807) that consists in three biological replicates each for wt NSCand km2b mutated NSC cells from *Mus musculus*.
+
+# [**RNA-seq analysis**]{.underline}
+
+# Load the data
+
+Use `fasterq` to download the FASTQ files associated with the SRA runs IDs. To do this create a script (load.data.sh) with `vim` (make it executable with `chmod u+x`).
+
+```{bash}
+cd ..
+head load_data.sh
+```
+
+Change the names of each file (with `mv`) from a new script (rename.sh)
+
+```{bash}
+cd ..
+head rename.sh
+```
+
+# FASTQ quality score
+
+Use `fastqc` for overall reads quality check: `fastqc *fastq`
+
+Use `multiqc . --ignore ChIP-Seq` in the project_track1 dir to summarize all the fastqc results of rnaseq data in a single html report
+
+![](images/images.001.jpeg)
+
+# Mapping
+
+You have to build the index for the genome/transcriptome you want to map reads on (the index-building program is included in the software package of the read mapper).
+
+The index starts from the (multi)FASTA file of the genome, split into chromosomes or, for transcriptomes, the sequences of transcripts.
+
+We want the mm9 version of the mus musculus genome (in FASTA format) for preparing our index.
+
+```{bash}
+cd ..
+head ref_chroms.sh
+```
+
+After removing non-canonical chromosomes:
+
+```{bash}
+cd ../Index/mm9/chroms
+ls
+```
+
+Index for RSEM: download it with `wget,` unzip it with `gunzip` and use the `rsem-prepare-reference` command to prepare the index of the transcriptome.
+
+```{bash}
+cd ..
+head ref_genes.sh
+```
+
+# Quantification (read counting)
+
+After mapping reads on the genome/transcriptome, we want to count how many belong to each gene. We use the RSEM mapping tool.
+
+After the index is done, use RSEM to map FASTQ files and quantify gene expression with `rsem-calculate-expression -p 2 --star` command from a new script (mapping_script.sh)
+
+```{bash}
+cd ..
+head mapping.sh
+```
+
+# Post-mapping quality checks
+
+Make RSEM plot some plots with `rsem-plot-model` command that can help us evaluate the quality of the mapping of our samples from a new script (post_mapping.sh)
+
+```{bash}
+cd ..
+head post_mapping.sh
+```
+
+To get more inside the mapping statistics and check the unmapped read in the infected samples, use `samtools stats` on the BAM files and then `plot-bamstats`.
+
+```{bash}
+cd ..
+head samtools.sh
+```
+
+```{bash}
+cd ..
+head plot_bamstats.sh
+```
+
+Check what's inside the folders
+
+```{bash}
+cd ../NPC_wt_rep1.stat
+ls -l
+```
+
+![](images/images.002.jpeg)
+
+# **Differential Gene Expression Analysis**
+
+In DGE analysis the aim is to identify genes that behave differently between two or more conditions. The analysis is done on R studio with the `edgeR` package.
+
+Load libraries
+
+```{r}
+# load packages
+library(edgeR)
+library(ggplot2)
+library(vidger)
+```
+
+Import the .genes.results files. The expected counts of RSEM are on the 4th column of each counts table file
+
+```{r}
+# import samples (genes.results files)
+NPC_wt_1 <- read.table("~/project_track1/NPC_wt_rep1.genes.results", header = TRUE, sep = "\t", row.names = 1)
+NPC_wt_2 <- read.table("~/project_track1/NPC_wt_rep2.genes.results", header = TRUE, sep = "\t", row.names = 1 )
+NPC_wt_3 <- read.table("~/project_track1/NPC_wt_rep3.genes.results", header = TRUE, sep ="\t", row.names = 1 )
+mutkdm2b_1 <- read.table("~/project_track1/NPC_mutkdm2b_rep1.genes.results", header = TRUE, sep ="\t", row.names = 1)
+mutkdm2b_2 <- read.table("~/project_track1/NPC_mutkdm2b_rep2.genes.results", header = TRUE, sep ="\t", row.names = 1)
+mutkdm2b_3 <- read.table("~/project_track1/NPC_mutkdm2b_rep3.genes.results", header = TRUE, sep ="\t", row.names = 1)
+```
+
+```{r}
+# create expected counts table from RSEM expected counts of every sample
+expected_counts_table <- cbind(NPC_wt_1[,4], NPC_wt_2[,4], NPC_wt_3[,4], mutkdm2b_1[,4], mutkdm2b_2[,4], mutkdm2b_3[,4])
+
+# rename columns and rows
+colnames(expected_counts_table) <- c("NPC_wt_1", "NPC_wt_2", "NPC_wt_3", "mutkdm2b_1", "mutkdm2b_2", "mutkdm2b_3")
+rownames(expected_counts_table) <- row.names(NPC_wt_1)
+head(expected_counts_table) # original table
+```
+
+The `DGEList` function from the edgeR package is used to create a DGEList object, incorporating a table of counts. By specifying `group`, two conditions are designated, each supported by three replicates. The `remove.zeroes` option eliminates any rows where the counts across all samples are zero
+
+```{r}
+# create DGEList object from expected counts table
+DG <- DGEList(counts = expected_counts_table, group = c(rep("NPC_wt", 3), rep("mut_kdm2b", 3)), 
+              samples = colnames(expected_counts_table), remove.zeros = T) # removing 6673 rows with all zero counts
+head(DG$counts) # edgeR internal counts table
+head(cpm(DG)) # CPM transformed table: CPM = (Counts x 106)/Tot_Mapped_Reads
+```
+
+```{r}
+# check dimensions
+dim(expected_counts_table) 
+dim(cpm(DG)) 
+```
+
+```{r}
+# remove genes with very low expression (keep those with at least 10 cpm in at least 2 samples)
+DG_keep <- rowSums(cpm(DG) > 10) >= 2
+DG <- DG[DG_keep, ,keep.lib.sizes = F]
+dim(cpm(DG))
+```
+
+25108 genes, 18345 genes with expression \> 0, 10164 genes with expression \> 10 CPM in at least two samples
+
+Compute the scaling factors (the bit about Trimmed Means of M -- TMM).
+
+```{r}
+# TMM NORMALIZATION
+DG$samples$norm.factors # initial factors (all ones)
+```
+
+```{r}
+head(cpm(DG)) # non normlized CPM
+```
+
+```{r}
+DG <- calcNormFactors(DG) # compute the scaling factors for each library
+DG$samples$norm.factors # scaling factors
+```
+
+```{r}
+head(cpm(DG)) # normalized CPM
+```
+
+Perform a MDS exploratory analysis (PCA-like technique). This visualization technique identifies the major sources of variation within the dataset.
+
+```{r}
+# multidimensional scaling plot of samples
+plotMDS(DG, cex = 0.6, col = c(rep("blue", 3), rep("red", 3)))
+```
+
+According to the plot, the greatest sources of variation in the data are the ones investigated: there is a clear distinction between the wtand the mutated group that suggests that the gene expression profiles are different between these two groups.
+
+Now estimate the tagwise dispersion, that is the gene-specific PHI, corresponding to the biological coefficient of variation, for the NB distribution
+
+```{r}
+# estimate negative binomial dispersions, it estimates PHI of the Negative Binomial 
+DG <- estimateDisp(DG)
+head(DG$tagwise.dispersion)
+plotBCV(DG)
+```
+
+Test for differentially expressed genes (DEGs) with `exactTest`. With this method, a p-value is assigned to each gene, estimating the likelihood of differential expression.
+
+```{r}
+# perform test for differential expression between the two conditions
+diff_expr_test <- exactTest(DG, c("NPC_wt", "mut_kdm2b"))
+```
+
+Use the `topTags` function is employed to identify genes with significant p-values: the p-value threshold is an indicator of the False Discovery Rate (FDR) which corrects for multiple hypothesis testing.
+
+```{r}
+# select genes with significant diff. expression (FDR <= 0.01)
+diff_expr_test_sign <- topTags(diff_expr_test, n = nrow(diff_expr_test), p.value = 0.01)
+```
+
+Check the differential expressed genes (DEGs).
+
+```{r}
+# check the differential expressed genes (DEGs)
+head(diff_expr_test_sign$table)
+```
+
+```{r}
+tail(diff_expr_test_sign$table)
+```
+
+Now check the number of up and down regulated genes
+
+```{r}
+# up-regulated genes (more expressed in infected)
+sum(diff_expr_test_sign$table$logFC > 0) 
+```
+
+```{r}
+# down-regulated genes (less expressed in infected)
+sum(diff_expr_test_sign$table$logFC < 0) 
+```
+
+According to our FDR threshold, we have 464 upregulated genes, that is significantly more expressed in mutated samples and 196 downregulated genes, that is significantly less expressed in mutated samples.
+
+```{r}
+# divide for up and down regulated genea
+up_regulated_genes <- row.names(diff_expr_test_sign$table)[diff_expr_test_sign$table$logFC > 0]
+down_regulated_genes <- row.names(diff_expr_test_sign$table)[diff_expr_test_sign$table$logFC < 0]
+```
+
+Now check the CPM distribution across all samples for the upregulated genes with two boxplots (one for the up-regulated and one for the down-regulated).
+
+```{r}
+# boxplot up 
+boxplot(cpm(DG) [up_regulated_genes,], notch = T, outline = F, col = c(rep("blue", 3), rep("red", 3)),
+        ylab = "CPM", xlab ="Samples", main = "CPM distribution up-regulated genes in mutant cells") 
+```
+
+In this picture is shown a boxplot for overexpressed genes: in particular it shows the distribution of CPM (Counts Per Million) values for genes that are identified as up-regulated in cells with kdm2b mutation (red) compared to the wt ones (blue). You can immediately see an higher expression of the genes in mutated cells (red) that can suggest that these genes are involved somehow and could have a role in some pathways
+
+```{r}
+# boxplot down
+boxplot(cpm(DG) [down_regulated_genes,], notch = T, outline = F, col = c(rep("blue", 3), rep("red", 3)),
+        ylab = "CPM", xlab ="Samples", main = "CPM distribution up-regulated genes in mutant cells")
+```
+
+Similarly, this boxplot shows CPM values for down-regulated genes in cells with kdm2b mutation. Also in this case, the mutated cells (red) are compared to the mock ones (blue). Here you can see a reduction in the activity of these genes as a result of the mutation, that can means that some processes in which these genes have a role could be suppressed as a consequence of the mutation.
+
+**Visualize the results with a scatterplot**
+
+```{r}
+# scatterplot
+vsScatterPlot(x = "NPC_wt", y = "mut_kdm2b", data = DG, type = "edger")
+```
+
+In this scatterplot, each gene is represented by a dot and the genes that deviate from the diagonal line represent genes that show significant differences in expression between the two groups.
+
+**Visualize the results with a volcano plot**
+
+```{r}
+# vulcano plot
+# set colors
+colors <- ifelse(diff_expr_test$table$PValue <= 0.01, ifelse(diff_expr_test$table$logFC > 0, "red", "blue"),
+                 "black")
+# plot
+vulcano_plot <- ggplot(diff_expr_test$table, aes(x = logFC, y = -log10(PValue))) +
+  geom_point(color = colors, size = 0.1) +
+  labs(x = "LogFC", y = "-log10 Pvalue", title = "Vulcano Plot") +
+  ylim(0, 20) +
+  theme_minimal()
+print(vulcano_plot)
+```
+
+In this vulcano plot we have the logFC on the X-axis against the - log10(PValue) on the Y-axis and the red dots represent the significant up-regulated genes, blue means significant down-regulated genes, and black means non-significant. The points furthest from the origin are the genes with the greatest (statistically meaningful) differences in expression.
+
+**Visualize the results with a MA plot**
+
+```{r}
+# MA plot
+vsMAPlot(x = "NPC_wt", y = "mut_kdm2b", data = DG, type = "edger", padj = 0.01)
+```
+
+This MA plot shows the mean expression against the logFC. Based on the colors of the dots you can see different combinations (for example: blue dots means adjusted p-value of \<0.01 and LFC of \> 1 etc.)
+
+# [**ChIP-Seq analysis**]{.underline}
+
+ChIP-Seq analysis in this study is crucial to identify the specific genomic regions where the KDM2B protein binds, elucidating the molecular mechanisms underlying its role in regulating gene expression
+
+Load the data
+
+```{bash}
+cd ../ChIP-Seq
+head load_data_chip.sh
+```
+
+# FASTQ quality score
+
+Use `fastqc` for overall reads quality check: `fastqc *fastq`
+
+Use `multiqc .` in the project_track1/ChIP-Seq dir to summarize all the fastqc results of chipseq data in a single html report
+
+![](images/images.003.jpeg)
+
+# Mapping
+
+Download the mm9 genome
+
+```{bash}
+cd ../ChIP-Seq
+head ref.sh
+```
+
+check the chromosomes
+
+```{bash}
+cd ../ChIP-Seq/Index/mm9
+grep ">" mm9.fa |more
+```
+
+Split the chromosomes in different fasta files
+
+```{bash}
+cd ../ChIP-Seq/Index/mm9
+head remove_anom_chrom.sh
+```
+
+Remove the anomalous chromosomes (random and M) and concatenate the remaining ones:
+
+```{bash}
+cd ../ChIP-Seq/Index/mm9
+head remove_anom_chrom2.sh
+```
+
+Run the bowtie2-build program to build the Bowtie index of the mus musculus genome. NB: use bowtie2 since the reads are longer: `nohup bowtie2-build --threads 4 mm9/mm9.fa mm9 &`
+
+Prepare a map.script to map all the samples with `bowtie2`. It will generate the bam files
+
+```{bash}
+cd ../ChIP-Seq
+head map.sh
+```
+
+With `samtools` stats followed by `plot-bamstats` we can collect some post-mapping quality info
+
+```{bash}
+cd ../ChIP-Seq
+head stats.sh
+```
+
+```{bash}
+cd ../ChIP-Seq
+head plot_stats.sh
+```
+
+![](images/images.004.jpeg)
+
+# Peak Calling
+
+With the peak calling we want to identify regions of the genome (peaks) where KDM2B binds to DNA. These peaks represent areas of DNA enrichment that have been immunoprecipitated and sequenced.
+
+For each IP/control pair, we use `macs2` call peak on the BAM files (use `-g mm` for mus musculus genome)
+
+```{bash}
+cd ../ChIP-Seq
+head callpeak.sh
+```
+
+![](images/images.005.jpeg)
+
+To generate plots of the peaks:
+
+`R CMD BATCH kdm2bcKONPC_KDM2B_vs_kdm2bcKONPC_input_model.r`
+
+Count the peaks in the two replicates
+
+```{bash}
+cd ../ChIP-Seq/wtNSC_KDM2B_peaks
+wc -l wtNSC_KDM2B_vs_wtNPC_input_peaks.narrowPeak 
+cd ../kdm2bcKONPC_KDM2B_peaks
+wc -l kdm2bcKONPC_KDM2B_vs_kdm2bcKONPC_input_peaks.narrowPeak 
+```
+
+It is not uncommon for one replicate to have fewer peaks than others due to insufficient coverage or other reasons
+
+Check how many of them overlap
+
+```{bash}
+cd ../ChIP-Seq
+bedtools intersect -u -b wtNSC_KDM2B_peaks/wtNSC_KDM2B_vs_wtNPC_input_peaks.narrowPeak -a kdm2bcKONPC_KDM2B_peaks/kdm2bcKONPC_KDM2B_vs_kdm2bcKONPC_input_peaks.narrowPeak |wc -l
+```
+
+Now we have to keep only the peaks that overlap and merge them. Once we know that the two replicates are consistent, we can use the Irreproducible Discovery Rate (IDR) method.
+
+Assigning an IDR (Irreproducible Discovery Rate) value to each peak allows us to assess how reproducible a peak is between replications. A lower IDR value indicates greater reproducibility, while a higher value suggests greater variability among replications.
+
+```{bash}
+cd ../ChIP-Seq
+head idr.sh
+```
+
+# Coverage of peaks
+
+We want to explore the coverage of reads from our ChIP-Seq and control samples on the peaks we identified
+
+```{r}
+# libraries
+library(GenomicRanges)
+library(rtracklayer)
+library(GenomicAlignments)
+```
+
+import bam files
+
+```{r}
+# import bam files
+wt_NPC_input1_bam <- readGAlignments("~/project_track1/ChIP-Seq/SRR17223711_wtNPC_input.bam")
+KDM2B_rep1_bam <- readGAlignments("~/project_track1/ChIP-Seq/SRR17223713_wtNSC_KDM2B.bam")
+
+KO_KDM2B_input2_bam<- readGAlignments("~/project_track1/ChIP-Seq/SRR17223712_kdm2bcKONPC_input.bam")
+KO_KDM2B_KDM2B_rep2_bam <- readGAlignments("~/project_track1/ChIP-Seq/SRR17223714_kdm2bcKONPC_KDM2B.bam")
+```
+
+```{r}
+# check the length
+print(paste("Length of wt_NPC_input1_bam:", length(wt_NPC_input1_bam)))
+print(paste("Length of KDM2B_rep1_bam:", length(KDM2B_rep1_bam)))
+print(paste("Length of KO_KDM2B_input2_bam:", length(KO_KDM2B_input2_bam)))
+print(paste("Length of KO_KDM2B_KDM2B_rep2_bam:", length(KO_KDM2B_KDM2B_rep2_bam)))
+```
+
+Compute library size normalisation factors. We use one sample (KDM2B_rep1_bam) as the reference and compute the normalisation factors for the other three samples.
+
+```{r}
+# compute library normalization factors
+NF <- list()
+
+NF$rep1_input1 <- length(KDM2B_rep1_bam) / length(wt_NPC_input1_bam)
+NF$rep1_rep2 <- length(KDM2B_rep1_bam) / length(KO_KDM2B_KDM2B_rep2_bam)
+NF$rep1_input2 <- length(KDM2B_rep1_bam) / length(KO_KDM2B_input2_bam)
+
+NF
+```
+
+Import the IDR peaks with the `import` funtion. The peaks have variable lengths, but we need peaks of the same length to compute the average position-by- position coverage. We can use the "summits" column of the narrowPeak file as the "anchor point" of each peak.
+
+```{r}
+# import idr peaks
+idr_peaks <- import("~/project_track1/ChIP-Seq/kdm2b_idr.narrowPeak", format = "bed", colnames = c("chrom", "start", "end"))
+summary(width(idr_peaks))
+```
+
+```{r}
+# get summit offset columns in GRanges object
+mcols(idr_peaks)$summit <- read.table("~/project_track1/ChIP-Seq/kdm2b_idr.narrowPeak")[,10]
+mcols(idr_peaks)$w <- width(idr_peaks)
+idr_peaks
+```
+
+here we are reading the file `kdm2b_idr.narrowPeak` as a table and we aree extracting the 10th column, which contains the summit positions (the points of highest coverage within the peaks). These positions are then added as a metadata column named "summit" to the `GRanges` object (`idr_peaks`).
+
+With the shift and flank functions, we standardise our peaks to have a width of 2000bps centred around the summits identified bymacs (thepeakcaller).
+
+```{r}
+# create a new peaks object with standard widths (anchored on summits)
+idr_peaks_summit <- flank(shift(idr_peaks, shift = idr_peaks$summit), width = 1000, both = TRUE)
+idr_peaks_summit$summits <- NULL
+idr_peaks_summit$w <- width(idr_peaks_summit)
+idr_peaks_summit
+```
+
+We need to have the same `seqlevels` for the peak files and the alignment: so we need to remove all the unnecessary alignments on the non-shared chromosomes: With the `pruning mode = "coarse"` argument of `seqlevels`, we remove them from the BAM objects.
+
+```{r}
+# in order to have the same seqlevels (same chromosomes) we remove the unwanted and non-shared chroms
+seqlevels(wt_NPC_input1_bam, pruning.mode = "coarse") <- seqlevels(KDM2B_rep1_bam,pruning.mode = "coarse") <-
+  seqlevels(KO_KDM2B_input2_bam, pruning.mode = "coarse") <- seqlevels(KO_KDM2B_KDM2B_rep2_bam, pruning.mode = "coarse") <-
+  seqlevels(idr_peaks_summit)
+
+# now we have the same seqlevels for all the objects
+seqlevels(idr_peaks_summit)
+seqlevels(wt_NPC_input1_bam)
+seqlevels(KDM2B_rep1_bam)
+seqlevels(KO_KDM2B_input2_bam)
+seqlevels(KO_KDM2B_KDM2B_rep2_bam)
+```
+
+Now we can compute the coverage (how many reads align in each position) with the coverage function.
+
+```{r}
+# compute coverage from the BAM files
+cov_wt_NPC_input1 <- coverage(wt_NPC_input1_bam)
+cov_KDM2B_rep1 <- coverage(KDM2B_rep1_bam)
+cov_KO_KDM2B_input2 <- coverage(KO_KDM2B_input2_bam)
+cov_KO_KDM2B_KDM2B_rep2 <- coverage(KO_KDM2B_KDM2B_rep2_bam)
+```
+
+Use the `Views` function to get the coverages around the peak summits
+
+```{r}
+# get Views on peak regions
+peaks_cov_wt_NPC_input1 <- Views(cov_wt_NPC_input1, idr_peaks_summit)
+peaks_cov_KDM2B_rep1 <- Views(cov_KDM2B_rep1, idr_peaks_summit)
+peaks_cov_KO_KDM2B_input2 <- Views(cov_KO_KDM2B_input2, idr_peaks_summit)
+peaks_cov_KO_KDM2B_KDM2B_rep2 <- Views(cov_KO_KDM2B_KDM2B_rep2, idr_peaks_summit)
+```
+
+Use `colMeans` to calculate the average coverage at each position of the normalized peaks by length on the Views objects after converting to matrix
+
+During the conversion, the normalization factors calculated earlier are also used to normalize the coverage of each sample.
+
+```{r}
+# convert Views to matrix so we can use colmeans function and normalise for library size
+peaks_allcov_input1 <- as.matrix(peaks_cov_wt_NPC_input1) * NF$rep1_input1
+peaks_allcov_rep1 <- as.matrix(peaks_cov_KDM2B_rep1)
+
+peaks_allcov_input2 <- as.matrix(peaks_cov_KO_KDM2B_input2) * NF$rep1_input2
+peaks_allcov_rep2 <- as.matrix(peaks_cov_KO_KDM2B_KDM2B_rep2) * NF$rep1_rep2
+
+peaks_meancov_input1 <- colMeans(peaks_allcov_input1)
+peaks_meancov_rep1 <- colMeans(peaks_allcov_rep1)
+
+peaks_meancov_input2 <- colMeans(peaks_allcov_input2)
+peaks_meancov_rep2 <- colMeans(peaks_allcov_rep2)
+```
+
+Plot the mean coverage vectors
+
+```{r}
+# plot coverages on peaks
+plot(peaks_meancov_rep1, type = "h", x = -1000:999, col = "blue", xlab = "Position long the peaks", ylab = "Mean coverage")
+points(peaks_meancov_input1, type = "h", x = -1000:999, col = "red")
+```
+
+```{r}
+plot(peaks_meancov_rep2, type = "h", x = -1000:999, col = "blue", xlab = "Position long the peaks", ylab = "Mean coverage")
+points(peaks_meancov_input2, type = "h", x = -1000:999, col = "red")
+```
+
+Draw boxplots of the mean coverage
+
+```{r}
+# boxplots
+boxplot(peaks_meancov_rep1, peaks_meancov_input1, peaks_meancov_rep2, peaks_meancov_input2, 
+        col = rep(c("blue", "red"), 2), outline = FALSE, names = c("rep1", "input1", "rep2", "input2"))
+```
+
+Higher coverage and consistent median values in peak regions for ChIP-Seq samples indicate specific binding of KDM2B. The boxplots show a higher median coverage for KDM2B ChIP-Seq samples compared to input controls. The interquartile range (IQR) for ChIP-Seq samples is higher, indicating more consistent and specific binding across the peaks.
+
+Check what happens outside of peaks:
+
+```{r}
+# check the coverage outside the peak regions
+shifted_idr_peaks_summits <- shift(idr_peaks_summit, 4000) # shift every peak of 1k positions
+
+# get Views on shifted peak regions
+s_peaks_cov_wt_NPC_input1 <- Views(cov_wt_NPC_input1, shifted_idr_peaks_summits)
+s_peaks_cov_KDM2B_rep1 <- Views(cov_KDM2B_rep1, shifted_idr_peaks_summits)
+s_peaks_cov_KO_KDM2B_input2 <- Views(cov_KO_KDM2B_input2, shifted_idr_peaks_summits)
+s_peaks_cov_KO_KDM2B_KDM2B_rep2 <- Views(cov_KO_KDM2B_KDM2B_rep2, shifted_idr_peaks_summits)
+```
+
+```{r}
+# convert Views to matrix so we can use colmeans function and normalise for library size
+s_peaks_allcov_input1 <- as.matrix(s_peaks_cov_wt_NPC_input1) * NF$rep1_input1
+s_peaks_allcov_rep1 <- as.matrix(s_peaks_cov_KDM2B_rep1)
+
+s_peaks_allcov_input2 <- as.matrix(s_peaks_cov_KO_KDM2B_input2) * NF$rep1_input2
+s_peaks_allcov_rep2 <- as.matrix(s_peaks_cov_KO_KDM2B_KDM2B_rep2) * NF$rep1_rep2
+
+s_peaks_meancov_input1 <- colMeans(s_peaks_allcov_input1)
+s_peaks_meancov_rep1 <- colMeans(s_peaks_allcov_rep1)
+
+s_peaks_meancov_input2 <- colMeans(s_peaks_allcov_input2)
+s_peaks_meancov_rep2 <- colMeans(s_peaks_allcov_rep2)
+```
+
+```{r}
+# look at the coverage
+# plot coverages 
+plot(s_peaks_meancov_rep1, type = "h", x = -1000:999, col = "blue", xlab = "Position long the peaks", ylab = "Mean coverage")
+points(s_peaks_meancov_input1, type = "h", x = -1000:999, col = "red")
+```
+
+```{r}
+plot(s_peaks_meancov_rep2, type = "h", x = -1000:999, col = "blue", xlab = "Position long the peaks", ylab = "Mean coverage")
+points(s_peaks_meancov_input2, type = "h", x = -1000:999, col = "red")
+```
+
+Boxplots:
+
+```{r}
+# boxplots
+boxplot(s_peaks_meancov_rep1, s_peaks_meancov_input1, s_peaks_meancov_rep2, s_peaks_meancov_input2, 
+        col = rep(c("blue", "red"), 2), outline = FALSE, names = c("rep1", "input1", "rep2", "input2"))
+```
+
+The boxplots demonstrate low and similar median coverage for both ChIP-Seq and input samples, confirming the specificity of peak regions identified.
