@@ -1,6 +1,6 @@
 # KDM2B-mediated PRC1 recruitment to chromatin: RNA-Seq and ChIP-Seq analysis
-This project analyses RNA-Seq and ChIP-Seq datasets from the paper: "Impaired KDM2B-mediated PRC1 recruitment to chromatin causes defective neural stem cell self-renewal and ASD/ID-like behaviors (GAo Y et al, 2022)"
-The study investigates the role of KDM2B in neural stem cell self-renewal and how its dysfunction leads to developmental and behavioural deficits.
+This project investigates RNA-Seq and ChIP-Seq datasets from the paper: "Impaired KDM2B-mediated PRC1 recruitment to chromatin causes defective neural stem cell self-renewal and ASD/ID-like behaviors (GAo Y et al, 2022)"
+The study focuses on the role of KDM2B in neural stem cell self-renewal and how its dysfunction leads to developmental and behavioural deficits.
 
 Data Sources:
 GEO Accession 
